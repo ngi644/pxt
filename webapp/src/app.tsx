@@ -89,6 +89,10 @@ import { ThemeManager } from "../../react-common/components/theming/themeManager
 import { applyPolyfills } from "./polyfills";
 import { sendUpdateFeedbackTheme } from "../../react-common/components/controls/Feedback/FeedbackEventListener";
 
+// telemetry
+import * as Tele from "./telemetry";
+import { buildProjectSnapshot } from "./snapshot";
+
 pxt.blocks.requirePxtBlockly = () => pxtblockly as any;
 pxt.blocks.requireBlockly = () => Blockly;
 pxt.blocks.registerFieldEditor = (selector, proto, validator) => pxtblockly.registerFieldEditor(selector, proto, validator);
@@ -4008,6 +4012,8 @@ export class ProjectView
         if (pxt.commands.notifyProjectSaved) {
             pxt.commands.notifyProjectSaved(this.state.header);
         }
+        // Call onProjectSaved when save is completed
+        // onProjectSaved();
     }
 
     runSimulator(opts: compiler.CompileOptions = {}): Promise<void> {
@@ -6061,6 +6067,22 @@ async function importGithubProject(repoid: string, requireSignin?: boolean) {
     } finally {
         core.hideLoading("loadingheader")
     }
+}
+
+
+async function onProjectSaved() {
+  // スナップショット（ソースのみ）
+  const code = await buildProjectSnapshot();
+  Tele.push({
+    event: "project_snapshot",
+    category: "artifact",
+    props: { code }
+  });
+  Tele.push({
+    event: "project_save",
+    category: "milestone",
+    props: { autosave: /* bool */ false }
+  });
 }
 
 function loadHeaderBySharedId(id: string) {

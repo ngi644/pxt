@@ -42,6 +42,10 @@ import { HIDDEN_CLASS_NAME } from "../../pxtblocks/plugins/flyout/blockInflater"
 import { AIFooter } from "../../react-common/components/controls/AIFooter";
 import { CREATE_VAR_BTN_ID } from "../../pxtblocks/builtins/variables";
 
+// telemetry
+import * as Tele from "./telemetry";
+import { buildProjectSnapshot } from "./snapshot";
+
 interface CopyDataEntry {
     version: 1;
     data: Blockly.ICopyData;
@@ -791,6 +795,9 @@ export class Editor extends toolboxeditor.ToolboxEditor {
         }
         this.editor = Blockly.inject(blocklyDiv, this.getBlocklyOptions(forceHasCategories)) as Blockly.WorkspaceSvg;
         pxtblockly.contextMenu.setupWorkspaceContextMenu(this.editor);
+
+        // attach blockly telemetry 
+        attachBlocksTelemetry(this.editor);
 
         // set Blockly Colors
         (async () => {
@@ -2762,4 +2769,36 @@ function maybeCloneBlockForMove(workspace: Blockly.WorkspaceSvg) {
 
         Blockly.getFocusManager().focusNode(clone as Blockly.BlockSvg);
     }
+}
+
+
+async function attachBlocksTelemetry(ws: Blockly.WorkspaceSvg) {
+
+  let code =  await buildProjectSnapshot();
+  let create = 0, move = 0, del = 0, chg = 0;
+  let timer: any;
+
+  ws.addChangeListener((ev: Blockly.Events.Abstract) => {
+    switch (ev.type) {
+      case Blockly.Events.BLOCK_CREATE: create++; break;
+      case Blockly.Events.BLOCK_MOVE:   move++;   break;
+      case Blockly.Events.BLOCK_DELETE: del++;    break;
+      case Blockly.Events.BLOCK_CHANGE: chg++;    break;
+      default: return; // UI系などは無視
+    }
+    if (timer) return;
+    
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (create || move || del || chg) {
+        Tele.push({
+          event: "blocks_change_batch",
+          category: "edit",
+          props: { create, move, del, change: chg, code: code },
+          
+        });
+        create = move = del = chg = 0;
+      }
+    }, 1000); // 1秒以内の変更はまとめる
+  });
 }
