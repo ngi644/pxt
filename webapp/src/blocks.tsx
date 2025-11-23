@@ -2777,6 +2777,7 @@ async function attachBlocksTelemetry(ws: Blockly.WorkspaceSvg) {
   let code =  await buildProjectSnapshot();
   let create = 0, move = 0, del = 0, chg = 0;
   let timer: any;
+  let block_type: string | undefined;
 
   ws.addChangeListener((ev: Blockly.Events.Abstract) => {
     switch (ev.type) {
@@ -2787,15 +2788,28 @@ async function attachBlocksTelemetry(ws: Blockly.WorkspaceSvg) {
       default: return; // UI系などは無視
     }
     if (timer) return;
-    
+
+    // Only access blockId if the event is a block event
+    let id: string | undefined;
+    if (
+      ev.type === Blockly.Events.BLOCK_CREATE ||
+      ev.type === Blockly.Events.BLOCK_MOVE ||
+      ev.type === Blockly.Events.BLOCK_DELETE ||
+      ev.type === Blockly.Events.BLOCK_CHANGE
+    ) {
+      // These event types have blockId
+      id = (ev as Blockly.Events.BlockBase).blockId;
+    }
+    let block = ws.getBlockById(id);
+    block_type = block ? block.type : undefined;
     timer = setTimeout(() => {
       timer = undefined;
       if (create || move || del || chg) {
         Tele.push({
           event: "blocks_change_batch",
           category: "edit",
-          props: { create, move, del, change: chg, code: code },
-          
+          props: {create, move, del, change: chg, code: code, block_type: block_type},
+
         });
         create = move = del = chg = 0;
       }
