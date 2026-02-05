@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>xAPI Logger Browser Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; }
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #0052a3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.success { background: #28a745; }
+        button.danger { background: #dc3545; }
+        #log {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>xAPI Logger Browser Test</h1>
+
+    <div class="section">
+        <h2>Configuration</h2>
+        <div>
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:3000/api/xapi/statements">
+        </div>
+        <div style="margin-top: 10px;">
+            <label>Token:</label>
+            <input type="text" id="token" value="please_change_me">
+        </div>
+        <div style="margin-top: 10px;">
+            <label>Project ID:</label>
+            <input type="text" id="projectId" value="test-project">
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Logger Control</h2>
+        <div id="loggerStatus" class="status disconnected">Logger: Not Initialized</div>
+        <button id="btnInit">Initialize Logger</button>
+        <button id="btnShutdown" class="danger" disabled>Shutdown Logger</button>
+    </div>
+
+    <div class="section">
+        <h2>Test Actions</h2>
+        <p><strong>Block Events:</strong></p>
+        <button id="btnPlaceBlock" disabled>Place Block</button>
+        <button id="btnRemoveBlock" disabled>Remove Block</button>
+        <button id="btnEditBlock" disabled>Edit Block</button>
+
+        <p><strong>Execution Events:</strong></p>
+        <button id="btnSimStart" disabled>Simulator Start</button>
+        <button id="btnSimComplete" class="success" disabled>Simulator Complete</button>
+        <button id="btnSimStop" class="danger" disabled>Simulator Stop</button>
+
+        <p><strong>Download Events:</strong></p>
+        <button id="btnDownloadStart" disabled>Download Start</button>
+        <button id="btnDownloadComplete" class="success" disabled>Download Complete</button>
+        <button id="btnDownloadError" class="danger" disabled>Download Error</button>
+
+        <p><strong>Other:</strong></p>
+        <button id="btnSave" disabled>Save Project</button>
+    </div>
+
+    <div class="section">
+        <h2>Console Log</h2>
+        <button id="btnClearLog">Clear Log</button>
+        <div id="log"></div>
+    </div>
+
+    <script type="module">
+        // xAPI Logger inline implementation for browser testing
+        // This is a simplified version for testing purposes
+
+        const log = document.getElementById('log');
+        const loggerStatus = document.getElementById('loggerStatus');
+
+        function appendLog(msg, type = 'info') {
+            const timestamp = new Date().toISOString().split('T')[1].slice(0, 12);
+            const colors = {
+                info: '#d4d4d4',
+                success: '#4ec9b0',
+                error: '#f14c4c',
+                warn: '#dcdcaa',
+                send: '#569cd6'
+            };
+            log.innerHTML += `<span style="color:${colors[type]}">[${timestamp}] ${msg}</span>\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        // Simple UUID generator
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        }
+
+        // Logger state
+        let state = {
+            initialized: false,
+            sessionId: null,
+            actorId: null,
+            projectId: null,
+            endpoint: null,
+            token: null
+        };
+
+        // Generate fingerprint (simplified)
+        async function generateFingerprint() {
+            const data = [
+                navigator.userAgent,
+                navigator.language,
+                screen.width + 'x' + screen.height,
+                new Date().getTimezoneOffset()
+            ].join('|');
+            const encoder = new TextEncoder();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+            return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // Build xAPI Statement
+        function buildStatement(verb, objectId, objectType, objectName, extensions = {}) {
+            return {
+                id: generateUUID(),
+                actor: {
+                    account: {
+                        homePage: 'https://makecode.microbit.org',
+                        name: state.actorId
+                    }
+                },
+                verb: {
+                    id: `urn:xapi:picapica-2d:verb:${verb}`,
+                    display: { 'en-US': verb }
+                },
+                object: {
+                    id: `urn:xapi:picapica-2d:${objectType}:${objectId}`,
+                    definition: {
+                        type: `urn:xapi:picapica-2d:activity-type:${objectType}`,
+                        name: { 'en-US': objectName }
+                    }
+                },
+                context: {
+                    registration: state.sessionId,
+                    extensions: {
+                        'urn:xapi:picapica-2d:ext:editor-mode': 'blocks',
+                        ...extensions
+                    }
+                },
+                timestamp: new Date().toISOString()
+            };
+        }
+
+        // Send statement to server
+        async function sendStatement(statement) {
+            appendLog(`Sending: ${statement.verb.display['en-US']} ${statement.object.id}`, 'send');
+
+            try {
+                const response = await fetch(state.endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Telemetry-Token': state.token
+                    },
+                    body: JSON.stringify(statement)
+                });
+
+                if (response.status === 204) {
+                    appendLog(`Sent successfully (HTTP 204)`, 'success');
+                    return true;
+                } else {
+                    const text = await response.text();
+                    appendLog(`Failed: HTTP ${response.status} - ${text}`, 'error');
+                    return false;
+                }
+            } catch (err) {
+                appendLog(`Network error: ${err.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Initialize logger
+        async function initializeLogger() {
+            state.endpoint = document.getElementById('serverUrl').value;
+            state.token = document.getElementById('token').value;
+            state.projectId = document.getElementById('projectId').value;
+            state.sessionId = generateUUID();
+            state.actorId = await generateFingerprint();
+            state.initialized = true;
+
+            appendLog('Logger initialized', 'success');
+            appendLog(`Session ID: ${state.sessionId}`, 'info');
+            appendLog(`Actor ID: ${state.actorId.slice(0, 16)}...`, 'info');
+
+            loggerStatus.textContent = 'Logger: Initialized';
+            loggerStatus.className = 'status connected';
+
+            // Send opened event
+            await sendStatement(buildStatement('opened', state.projectId, 'project', 'Test Project'));
+
+            updateButtons(true);
+        }
+
+        // Shutdown logger
+        async function shutdownLogger() {
+            await sendStatement(buildStatement('closed', state.projectId, 'project', 'Test Project'));
+
+            state.initialized = false;
+            appendLog('Logger shutdown', 'warn');
+
+            loggerStatus.textContent = 'Logger: Not Initialized';
+            loggerStatus.className = 'status disconnected';
+
+            updateButtons(false);
+        }
+
+        // Update button states
+        function updateButtons(enabled) {
+            document.getElementById('btnInit').disabled = enabled;
+            document.getElementById('btnShutdown').disabled = !enabled;
+            document.querySelectorAll('button[id^="btnPlace"], button[id^="btnRemove"], button[id^="btnEdit"], button[id^="btnSim"], button[id^="btnDownload"], button[id^="btnSave"]').forEach(btn => {
+                btn.disabled = !enabled;
+            });
+        }
+
+        // Event handlers
+        document.getElementById('btnInit').onclick = initializeLogger;
+        document.getElementById('btnShutdown').onclick = shutdownLogger;
+        document.getElementById('btnClearLog').onclick = () => log.innerHTML = '';
+
+        document.getElementById('btnPlaceBlock').onclick = () =>
+            sendStatement(buildStatement('placed', 'basic_showString', 'block', 'Show String'));
+
+        document.getElementById('btnRemoveBlock').onclick = () =>
+            sendStatement(buildStatement('removed', 'basic_showString', 'block', 'Show String'));
+
+        document.getElementById('btnEditBlock').onclick = () =>
+            sendStatement(buildStatement('edited', 'basic_showString', 'block', 'Show String'));
+
+        document.getElementById('btnSimStart').onclick = () =>
+            sendStatement(buildStatement('executed', state.projectId, 'project', 'Test Project', { status: 'started' }));
+
+        document.getElementById('btnSimComplete').onclick = () =>
+            sendStatement(buildStatement('executed', state.projectId, 'project', 'Test Project', { status: 'completed' }));
+
+        document.getElementById('btnSimStop').onclick = () =>
+            sendStatement(buildStatement('executed', state.projectId, 'project', 'Test Project', { status: 'stopped' }));
+
+        document.getElementById('btnDownloadStart').onclick = () =>
+            sendStatement(buildStatement('downloaded', 'microbit-v2', 'device', 'micro:bit v2', { status: 'started' }));
+
+        document.getElementById('btnDownloadComplete').onclick = () =>
+            sendStatement(buildStatement('downloaded', 'microbit-v2', 'device', 'micro:bit v2', { status: 'completed' }));
+
+        document.getElementById('btnDownloadError').onclick = () =>
+            sendStatement(buildStatement('downloaded', 'microbit-v2', 'device', 'micro:bit v2', { status: 'error', errorMessage: 'Device not found' }));
+
+        document.getElementById('btnSave').onclick = () =>
+            sendStatement(buildStatement('saved', state.projectId, 'project', 'Test Project'));
+
+        appendLog('Browser test ready. Click "Initialize Logger" to start.', 'info');
+    </script>
+</body>
+</html>

@@ -22,6 +22,9 @@ import { WorkspaceSearch } from "@blockly/plugin-workspace-search";
 
 import Util = pxt.Util;
 import { DebuggerToolbox } from "./debuggerToolbox";
+
+// xAPI operation logging
+import * as pxtXapi from "./xapi/pxtIntegration";
 import { ErrorDisplayInfo, ErrorList, StackFrameDisplayInfo } from "./errorList";
 import { resolveExtensionUrl } from "./extensionManager";
 import { experiments, initEditorExtensionsAsync } from "../../pxteditor";
@@ -42,8 +45,6 @@ import { HIDDEN_CLASS_NAME } from "../../pxtblocks/plugins/flyout/blockInflater"
 import { AIFooter } from "../../react-common/components/controls/AIFooter";
 import { CREATE_VAR_BTN_ID } from "../../pxtblocks/builtins/variables";
 
-// telemetry
-import * as Tele from "./telemetry";
 import { buildProjectSnapshot } from "./snapshot";
 
 interface CopyDataEntry {
@@ -796,8 +797,9 @@ export class Editor extends toolboxeditor.ToolboxEditor {
         this.editor = Blockly.inject(blocklyDiv, this.getBlocklyOptions(forceHasCategories)) as Blockly.WorkspaceSvg;
         pxtblockly.contextMenu.setupWorkspaceContextMenu(this.editor);
 
-        // attach blockly telemetry 
-        attachBlocksTelemetry(this.editor);
+        // register xAPI workspace for operation logging
+        pxtXapi.setBlocklyWorkspace(this.editor);
+        pxtXapi.onEditorModeChange("blocks");
 
         // set Blockly Colors
         (async () => {
@@ -2772,47 +2774,3 @@ function maybeCloneBlockForMove(workspace: Blockly.WorkspaceSvg) {
 }
 
 
-async function attachBlocksTelemetry(ws: Blockly.WorkspaceSvg) {
-
-  let code =  await buildProjectSnapshot();
-  let create = 0, move = 0, del = 0, chg = 0;
-  let timer: any;
-  let block_type: string | undefined;
-
-  ws.addChangeListener((ev: Blockly.Events.Abstract) => {
-    switch (ev.type) {
-      case Blockly.Events.BLOCK_CREATE: create++; break;
-      case Blockly.Events.BLOCK_MOVE:   move++;   break;
-      case Blockly.Events.BLOCK_DELETE: del++;    break;
-      case Blockly.Events.BLOCK_CHANGE: chg++;    break;
-      default: return; // UI系などは無視
-    }
-    if (timer) return;
-
-    // Only access blockId if the event is a block event
-    let id: string | undefined;
-    if (
-      ev.type === Blockly.Events.BLOCK_CREATE ||
-      ev.type === Blockly.Events.BLOCK_MOVE ||
-      ev.type === Blockly.Events.BLOCK_DELETE ||
-      ev.type === Blockly.Events.BLOCK_CHANGE
-    ) {
-      // These event types have blockId
-      id = (ev as Blockly.Events.BlockBase).blockId;
-    }
-    let block = ws.getBlockById(id);
-    block_type = block ? block.type : undefined;
-    timer = setTimeout(() => {
-      timer = undefined;
-      if (create || move || del || chg) {
-        Tele.push({
-          event: "blocks_change_batch",
-          category: "edit",
-          props: {create, move, del, change: chg, code: code, block_type: block_type},
-
-        });
-        create = move = del = chg = 0;
-      }
-    }, 1000); // 1秒以内の変更はまとめる
-  });
-}

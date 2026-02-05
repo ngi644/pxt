@@ -29,13 +29,14 @@ import * as pxteditor from "../../pxteditor";
 import IProjectView = pxt.editor.IProjectView;
 import ErrorListState = pxt.editor.ErrorListState;
 
+// xAPI operation logging
+import * as pxtXapi from "./xapi/pxtIntegration";
+
 import * as pxtblockly from "../../pxtblocks";
 import { ThemeManager } from "../../react-common/components/theming/themeManager";
 import { ErrorHelpException, getErrorHelpAsText } from "./errorHelp";
 import { AIErrorExplanationText } from "./components/AIErrorExplanationText";
 
-// telemetry
-import * as Tele from "./telemetry";
 
 const MIN_EDITOR_FONT_SIZE = 10
 const MAX_EDITOR_FONT_SIZE = 40
@@ -979,6 +980,10 @@ export class Editor extends toolboxeditor.ToolboxEditor {
         return pxteditor.monaco.initMonacoAsync(editorElement).then((editor) => {
             this.editor = editor;
 
+            // register xAPI editor for operation logging
+            pxtXapi.setMonacoEditor(this.editor);
+            pxtXapi.onEditorModeChange(this.fileType === pxt.editor.FileType.Python ? "python" : "typescript");
+
             // This is used to detect ios 13 on iPad, which is not properly detected by monaco
             if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1 && !this.mobileKeyboardWidget) {
                 this.mobileKeyboardWidget = new ShowKeyboardWidget(this.editor);
@@ -1114,34 +1119,10 @@ export class Editor extends toolboxeditor.ToolboxEditor {
             });
 
 
-            let typed = 0, deleted = 0, changes = 0;
-            let monacoTimer: any;
-
             editor.onDidChangeModelContent(e => {
                 // Clear ranges because the model changed
                 if (this.fieldEditors)
                     this.fieldEditors.clearRanges(editor);
-
-                for (const c of e.changes) {
-                    const ins = c.text.length;
-                    const del = (c.rangeLength || 0);
-                    if (ins) typed += ins;
-                    if (del) deleted += del;
-                    changes++;
-                }
-                if (monacoTimer) return;
-                monacoTimer = setTimeout(() => {
-                    monacoTimer = undefined;
-                    if (typed || deleted || changes) {
-                    Tele.push({
-                        event: "monaco_delta_batch",
-                        category: "edit",
-                        props: { typed, deleted, changes }
-                    });
-                    typed = deleted = changes = 0;
-                    }
-                }, 1000); // 1s debounce
-
             })
         })
     }

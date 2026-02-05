@@ -89,9 +89,10 @@ import { ThemeManager } from "../../react-common/components/theming/themeManager
 import { applyPolyfills } from "./polyfills";
 import { sendUpdateFeedbackTheme } from "../../react-common/components/controls/Feedback/FeedbackEventListener";
 
-// telemetry
-import * as Tele from "./telemetry";
 import { buildProjectSnapshot } from "./snapshot";
+
+// xAPI operation logging
+import * as pxtXapi from "./xapi/pxtIntegration";
 
 pxt.blocks.requirePxtBlockly = () => pxtblockly as any;
 pxt.blocks.requireBlockly = () => Blockly;
@@ -166,6 +167,7 @@ export class ProjectView
     private firstRun: boolean;
 
     private runToken: pxt.Util.CancellationToken;
+    private lastRunWasManual: boolean = false; // Track if simulator run was manual (user-initiated)
     private updatingEditorFile: boolean;
     private loadingExample: boolean;
     private openingTypeScript: boolean;
@@ -490,7 +492,8 @@ export class ProjectView
             } else if (this.state.resumeOnVisibility) {
                 this.setState({ resumeOnVisibility: false });
                 // We did a save when the page was hidden, no need to save again.
-                this.runSimulator();
+                // Resume is automatic (not user-initiated)
+                this.runSimulator({ background: true });
                 cmds.maybeReconnectAsync(false, true);
             } else if (!this.state.home) {
                 cmds.maybeReconnectAsync(false, true);
@@ -1173,9 +1176,13 @@ export class ProjectView
                     case pxsim.SimulatorState.Pending:
                     case pxsim.SimulatorState.Stopped:
                         this.setState({ simState: SimState.Stopped }, simStateChanged);
+                        // Log simulator stop to xAPI
+                        pxtXapi.onSimulatorStop().catch(() => {});
                         break;
                     case pxsim.SimulatorState.Running:
                         this.setState({ simState: SimState.Running }, simStateChanged);
+                        // Log simulator start to xAPI (only manual runs)
+                        pxtXapi.onSimulatorStart(this.blocksEditor?.editor, this.lastRunWasManual).catch(() => {});
                         break;
                 }
             },
@@ -1199,9 +1206,17 @@ export class ProjectView
         // subscribe to user preference changes (for simulator or non-render subscriptions)
         data.subscribe(this.cloudStatusSubscriber, `${cloud.HEADER_CLOUDSTATE}:*`);
         data.subscribe(this.headerChangeSubscriber, "header:*");
+
+        // Initialize xAPI operation logging
+        pxtXapi.initXapi(
+            this.state.header?.id,
+            this.isBlocksActive() ? "blocks" : this.isPythonActive() ? "python" : "typescript"
+        ).catch(e => pxt.debug("xAPI init failed: " + e));
     }
 
     public componentWillUnmount() {
+        // Shutdown xAPI logging
+        pxtXapi.shutdownXapi().catch(() => {});
         data.unsubscribe(this.cloudStatusSubscriber);
         data.unsubscribe(this.headerChangeSubscriber);
         this.themeManager?.unsubscribe("mainWebapp");
@@ -1732,6 +1747,10 @@ export class ProjectView
 
     private async internalLoadHeaderAsync(h: pxt.workspace.Header, editorState?: pxt.editor.EditorState): Promise<void> {
         pxt.debug(`loading ${h.id} (pxt v${h.targetVersion})`);
+
+        // Log xAPI project change
+        pxtXapi.onProjectChange(h.id);
+
         this.stopSimulator(true);
         if (pxt.appTarget.simulator && pxt.appTarget.simulator.aspectRatio) {
             simulator.driver.preload(pxt.appTarget.simulator.aspectRatio);
@@ -2844,6 +2863,10 @@ export class ProjectView
 
     saveProjectToFileAsync(): Promise<void> {
         const mpkg = pkg.mainPkg;
+
+        // Log xAPI save event (manual file export)
+        pxtXapi.onProjectSave(this.blocksEditor?.editor, true).catch(() => {});
+
         if (saveAsBlocks()) {
             pxt.BrowserUtils.browserDownloadText(mpkg.readFile(pxt.MAIN_BLOCKS), pkg.genFileName(".blocks"), { contentType: 'application/xml' });
             return Promise.resolve();
@@ -3340,6 +3363,9 @@ export class ProjectView
                 return this.saveProjectNameAsync()
                     .then(() => this.saveFileAsync())
                     .then(() => {
+                        // Log xAPI save event (manual save)
+                        pxtXapi.onProjectSave(this.blocksEditor?.editor, true).catch(() => {});
+
                         if (!pxt.appTarget.compile.hasHex || pxt.appTarget.compile.useMkcd || pxt.appTarget.compile.saveAsPNG || saveAsBlocks() || saveTutorialTemplate()) {
                             this.saveProjectToFileAsync()
                                 .finally(() => {
@@ -3528,15 +3554,20 @@ export class ProjectView
                     }
                 }
 
-                // restart sim early before deployment
+                // restart sim early before deployment (background/auto-run, not user-initiated)
                 if (simRestart) {
-                    this.runSimulator();
+                    this.runSimulator({ background: true });
                     simRestart = false
                 }
 
                 // hardware deployment
                 let deployStartTime = Date.now()
                 pxt.tickEvent("deploy.start")
+
+                // Log xAPI download start
+                const deviceType = pxt.appTarget.id || "microbit";
+                const deviceName = pxt.appTarget.name || "micro:bit";
+                pxtXapi.onDownloadStart(deviceType, deviceName, this.blocksEditor?.editor).catch(() => {});
 
                 try {
                     this._deploying = true
@@ -3550,6 +3581,9 @@ export class ProjectView
 
                     let elapsed = Date.now() - deployStartTime;
                     pxt.tickEvent("deploy.finished", { "elapsedMs": elapsed });
+
+                    // Log xAPI download complete
+                    pxtXapi.onDownloadComplete(deviceType, deviceName).catch(() => {});
                 }
                 catch (e) {
                     if (e.notifyUser) {
@@ -3561,6 +3595,9 @@ export class ProjectView
                     let elapsed = Date.now() - deployStartTime;
                     pxt.tickEvent("deploy.exception", { "notifyUser": e.notifyUser, "elapsedMs": elapsed });
                     pxt.reportException(e);
+
+                    // Log xAPI download error
+                    pxtXapi.onDownloadError(deviceType, e.message || "Download failed", deviceName).catch(() => {});
                     if (userContextWindow) {
                         try {
                             userContextWindow.close()
@@ -3587,7 +3624,7 @@ export class ProjectView
             }
             finally {
                 this.setState({ compiling: false, isSaving: false });
-                if (simRestart) this.runSimulator();
+                if (simRestart) this.runSimulator({ background: true });
             }
         } catch (e) {
             this.setState({ compiling: false, isSaving: false });
@@ -4012,8 +4049,8 @@ export class ProjectView
         if (pxt.commands.notifyProjectSaved) {
             pxt.commands.notifyProjectSaved(this.state.header);
         }
-        // Call onProjectSaved when save is completed
-        // onProjectSaved();
+        // Note: xAPI save logging removed here - happens too frequently with auto-save
+        // Manual saves are logged via download/compile flow
     }
 
     runSimulator(opts: compiler.CompileOptions = {}): Promise<void> {
@@ -4049,6 +4086,9 @@ export class ProjectView
             }
 
             this.syncPreferredEditor()
+
+            // Track if this is a manual run (not background/auto-run)
+            this.lastRunWasManual = !opts.background;
 
             simulator.stop(false, true);
 
@@ -6070,20 +6110,6 @@ async function importGithubProject(repoid: string, requireSignin?: boolean) {
 }
 
 
-async function onProjectSaved() {
-  // スナップショット（ソースのみ）
-  const code = await buildProjectSnapshot();
-  Tele.push({
-    event: "project_snapshot",
-    category: "artifact",
-    props: { code }
-  });
-  Tele.push({
-    event: "project_save",
-    category: "milestone",
-    props: { autosave: /* bool */ false }
-  });
-}
 
 function loadHeaderBySharedId(id: string) {
     core.showLoading("loadingheader", lf("loading project..."));
