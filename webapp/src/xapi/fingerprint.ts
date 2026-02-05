@@ -10,6 +10,7 @@
 
 import { Actor } from "./types";
 import { sha256 } from "./utils";
+import { DEFAULT_ACTOR_HOME_PAGE } from "./config";
 
 /**
  * Cached fingerprint to avoid recalculation.
@@ -20,11 +21,6 @@ let cachedFingerprint: string | null = null;
  * Cached explicit user ID (from URL or localStorage).
  */
 let cachedUserId: string | null = null;
-
-/**
- * Default home page for Actor identification.
- */
-const DEFAULT_HOME_PAGE = "https://makecode.microbit.org";
 
 /**
  * Storage key for explicit user ID.
@@ -443,7 +439,7 @@ export async function createActor(homePage?: string): Promise<Actor> {
 
     return {
         account: {
-            homePage: homePage || DEFAULT_HOME_PAGE,
+            homePage: homePage || DEFAULT_ACTOR_HOME_PAGE,
             name: actorName,
         },
     };

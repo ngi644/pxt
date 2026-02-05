@@ -26,7 +26,7 @@ export const DEFAULT_TOKEN = "please_change_me";
 /**
  * Actor home page URL (used in xAPI statements).
  */
-export const DEFAULT_ACTOR_HOME_PAGE = "https://makecode.microbit.org";
+export const DEFAULT_ACTOR_HOME_PAGE = "https://picapica-2d.web.app";
 
 /**
  * Default batch size for sending statements.
