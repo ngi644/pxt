@@ -55,7 +55,9 @@ export type VerbId =
     | "urn:xapi:picapica-2d:verb:connected"
     | "urn:xapi:picapica-2d:verb:disconnected"
     | "urn:xapi:picapica-2d:verb:nested"
-    | "urn:xapi:picapica-2d:verb:selected";
+    | "urn:xapi:picapica-2d:verb:selected"
+    | "urn:xapi:picapica-2d:verb:grabbed"
+    | "urn:xapi:picapica-2d:verb:dropped";
 
 /**
  * Verb display names.
@@ -73,7 +75,9 @@ export type VerbDisplay =
     | "connected"
     | "disconnected"
     | "nested"
-    | "selected";
+    | "selected"
+    | "grabbed"
+    | "dropped";
 
 /**
  * Verb represents the action performed by the learner.

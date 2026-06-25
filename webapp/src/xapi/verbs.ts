@@ -68,6 +68,14 @@ const VERB_DEFINITIONS: Record<VerbDisplay, VerbDefinition> = {
         id: "urn:xapi:picapica-2d:verb:selected",
         display: "selected",
     },
+    grabbed: {
+        id: "urn:xapi:picapica-2d:verb:grabbed",
+        display: "grabbed",
+    },
+    dropped: {
+        id: "urn:xapi:picapica-2d:verb:dropped",
+        display: "dropped",
+    },
 };
 
 /**
@@ -115,6 +123,10 @@ export const Verbs = {
     NESTED: createVerb("nested"),
     /** Block selected */
     SELECTED: createVerb("selected"),
+    /** Block grabbed (drag start / つかんだ) */
+    GRABBED: createVerb("grabbed"),
+    /** Block dropped (drag end / 離した) */
+    DROPPED: createVerb("dropped"),
 } as const;
 
 /**

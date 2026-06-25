@@ -8,8 +8,8 @@ import { Verbs } from "./verbs";
 import { createBlockActivity } from "./activities";
 import { createStatement } from "./statement";
 import { captureBlocklySnapshot } from "./snapshot";
-import { throttle } from "./utils";
-import { EditorMode, CodeSnapshot, Verb } from "./types";
+import { throttle, formatDuration } from "./utils";
+import { EditorMode, CodeSnapshot, Verb, Result } from "./types";
 
 /**
  * Blockly event types we care about.
@@ -20,6 +20,7 @@ const TRACKED_EVENTS = [
     "move", // Block moved (includes connection changes)
     "change", // Block field changed
     "click", // Block clicked/selected
+    "drag", // Block drag start/end (grabbed/dropped)
 ];
 
 /**
@@ -45,6 +46,8 @@ interface BlocklyEvent {
     name?: string; // Field name that changed
     oldValue?: unknown; // Previous value
     newValue?: unknown; // New value
+    // Drag event properties
+    isStart?: boolean; // True if drag start (grabbed), false if drag end (dropped)
 }
 
 /**
@@ -108,6 +111,12 @@ interface ParentState {
     inputName?: string;
 }
 const blockParentStates: Map<string, ParentState | null> = new Map();
+
+/**
+ * Track drag start time (ms) for each block to compute drag duration.
+ * Key: blockId, Value: Date.now() at drag start.
+ */
+const dragStartTimes: Map<string, number> = new Map();
 
 /**
  * Gets the current parent info for a block.
@@ -259,10 +268,11 @@ async function handleBlocklyEvent(
         return;
     }
 
-    // Skip events that shouldn't be recorded (except UI events, click, and move)
+    // Skip events that shouldn't be recorded (except UI events, click, move, and drag)
     // Note: We always allow move events because PXT's Blockly doesn't populate
     // oldParentId/newParentId in events, so we use our own parent tracking instead.
-    if (!event.recordUndo && event.type !== "click" && event.type !== "move") {
+    // Drag events are UI events (recordUndo=false) but we track them for grabbed/dropped.
+    if (!event.recordUndo && event.type !== "click" && event.type !== "move" && event.type !== "drag") {
         return;
     }
 
@@ -284,6 +294,7 @@ async function handleBlocklyEvent(
     let action: string = event.type;
     let parentBlockId: string | undefined;
     let inputName: string | undefined;
+    let result: Result | undefined;
 
     switch (event.type) {
         case "create":
@@ -299,9 +310,31 @@ async function handleBlocklyEvent(
         case "delete":
             verb = Verbs.REMOVED;
             action = "deleted";
-            // Clean up parent tracking for deleted block
+            // Clean up tracking for deleted block
             if (event.blockId) {
                 blockParentStates.delete(event.blockId);
+                dragStartTimes.delete(event.blockId);
+            }
+            break;
+
+        case "drag":
+            // Drag start = grabbed (つかんだ), drag end = dropped (離した)
+            if (event.blockId && event.isStart) {
+                verb = Verbs.GRABBED;
+                action = "grabbed";
+                dragStartTimes.set(event.blockId, Date.now());
+            } else if (event.blockId) {
+                verb = Verbs.DROPPED;
+                action = "dropped";
+                const startTime = dragStartTimes.get(event.blockId);
+                if (startTime !== undefined) {
+                    const durationMs = Date.now() - startTime;
+                    result = { duration: formatDuration(durationMs) };
+                    dragStartTimes.delete(event.blockId);
+                }
+            } else {
+                // Drag event without a block id (e.g. workspace drag) — ignore
+                return;
             }
             break;
 
@@ -499,9 +532,11 @@ async function handleBlocklyEvent(
     // Create activity for the block
     const activity = createBlockActivity(blockType, blockName, extensions);
 
-    // Capture snapshot if configured
+    // Capture snapshot if configured.
+    // Skip for click and drag events: timing is the goal for drag, and the
+    // resulting placement snapshot is captured by the subsequent move/placed event.
     let snapshot: CodeSnapshot | null = null;
-    if (currentConfig.includeSnapshots && event.type !== "click") {
+    if (currentConfig.includeSnapshots && event.type !== "click" && event.type !== "drag") {
         snapshot = await captureBlocklySnapshot(workspace);
 
         // Skip if snapshot hasn't changed (for throttled events)
@@ -521,6 +556,7 @@ async function handleBlocklyEvent(
         verb,
         object: activity,
         snapshot: snapshot || undefined,
+        result,
         editorMode: currentConfig.editorMode,
     });
 }
@@ -544,9 +580,10 @@ function createEventHandler(
 
     // Main handler that routes events appropriately
     return (event: BlocklyEvent) => {
-        // Move events are not throttled to ensure accurate parent tracking
-        // (connection/disconnection detection depends on seeing every move)
-        if (event.type === "move") {
+        // Move and drag events are not throttled to ensure accurate tracking
+        // (connection/disconnection detection and grab/drop timing depend on
+        // seeing every event)
+        if (event.type === "move" || event.type === "drag") {
             handleBlocklyEvent(event, workspace).catch(() => {
                 // Ignore logging errors
             });
